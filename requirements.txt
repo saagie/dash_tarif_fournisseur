@@ -1,0 +1,5 @@
+sqlalchemy<2.0
+dash
+pandas
+dash-bootstrap-components
+psycopg2
