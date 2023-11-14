@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 import dash
 from dash import dcc
 from dash import html
@@ -45,13 +47,24 @@ postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
                                                  column_selectable='multi',
                                                  selected_columns=[],
                                                  selected_rows=[],
-                                                 style_table={'overflowX': 'scroll'})
+                                                 style_table={'overflowX': 'scroll'},
+                                                 )
+
+df_cart = pd.read_sql(f'SELECT * FROM  test_cart', pg_engine)
+
+#
+df_additional_cols = pd.DataFrame(OrderedDict([
+    ('nouvelle_colonne', ['nouveau_prix']),
+    ('colonne1', ["Tarif1"]),
+    ('operation', ["*"]),
+    ('colonne2', ["Quantité de réception"]),
+]))
+
 
 
 @app.callback(Output(component_id='cart_data', component_property='children'),
               [Input(component_id='refresh', component_property='n_clicks')])
 def populate_datatable(refresh):
-    df_cart = pd.read_sql(f'SELECT * FROM  test_cart', pg_engine)
     dt_cart = dash_table.DataTable(df_cart.to_dict('records'),
                                    [{"name": i, "id": i} for i in df_cart.columns],
                                    cell_selectable=True,
@@ -119,6 +132,38 @@ def update_styles(selected_columns, rows, selected_row_indices):
         return ""
 
 
+
+@app.callback(Output(component_id='output_schema', component_property='children'),
+              [Input(component_id='refresh', component_property='n_clicks'),
+               Input('postgresql_supplier_table', 'selected_columns'),
+               Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
+               Input(component_id='postgresql_supplier_table', component_property='derived_virtual_indices'),
+               Input(component_id='table-dropdown', component_property='data')
+               ])
+def populate_output_schema(refresh, selected_columns, rows, selected_row_indices, data):
+    list_cols = df_cart.columns.tolist()
+    print(data)
+
+    if rows and selected_columns:
+        print("============NEEEEEEWWWWWWW=========================")
+        list_cols.extend(df_supplier.loc[rows][selected_columns].values.tolist()[0])
+        print(list_cols)
+        print("============FIIIIIINNNNNN=========================")
+
+    return list_cols
+
+
+@app.callback(
+    Output('table-dropdown', 'data'),
+    Input('editing-rows-button', 'n_clicks'),
+    State('table-dropdown', 'data'),
+    State('table-dropdown', 'columns'))
+def add_row(n_clicks, rows, columns):
+    if n_clicks > 0:
+        rows.append({c['id']: '' for c in columns})
+    return rows
+
+
 app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(html.P('Données paniers')),
     dbc.Row(id="cart_data", style={'margin-left': '2%', 'margin-right': '2%', }),
@@ -126,9 +171,40 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(postgresql_supplier_table, style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
     html.P("Ajouter des colonnes pour l'analyse"),
-    dcc.Textarea(id="add_cols",
-                 value="Type something like new_col=col1 * col2...",
-                 style={'width': '90%', 'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(dash_table.DataTable(
+        id='table-dropdown',
+        data=df_additional_cols.to_dict('records'),
+        columns=[
+            {'id': 'nouvelle_colonne', 'name': 'nouvelle_colonne', },
+            {'id': 'colonne1', 'name': 'colonne1', 'presentation': 'dropdown'},
+            {'id': 'operation', 'name': 'operation', 'presentation': 'dropdown'},
+            {'id': 'colonne2', 'name': 'colonne2', 'presentation': 'dropdown'},
+        ],
+        editable=True,
+        dropdown={
+            'colonne1': {
+                'options': [
+                    {'label': i, 'value': i}
+                    for i in (df_cart.columns.tolist() + df_supplier.columns.tolist())
+                ]
+            },
+            'operation': {
+                'options': [
+                    {'label': i, 'value': i}
+                    for i in ['+', '-', '*', '/']
+                ]
+            },
+            'colonne2': {
+                'options': [
+                    {'label': i, 'value': i}
+                    for i in (df_cart.columns.tolist() + df_supplier.columns.tolist())
+                ]
+            }
+        }
+    ), style={'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    html.Button('Add Row', id='editing-rows-button', n_clicks=0),
+
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dbc.Button("Submit", id='submit', color="primary", className="mr-1", n_clicks=0)),
     dbc.Row(html.Br(), class_name=".mb-4"),
@@ -139,6 +215,10 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(dcc.Markdown(id="output_columns"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown(id="additional_cols"), ),
+    dbc.Row(dcc.Markdown(id="output_schema"), style={'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+
+    dbc.Row(html.Br(), class_name=".mb-4"),
 
 ])
 
