@@ -11,10 +11,33 @@ from sqlalchemy import create_engine
 import dash
 from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
-
+import sys
 import pandas as pd
 
 
+# Define data type
+def table_type(df_column):
+    # Note - this only works with Pandas >= 1.0.0
+
+    if sys.version_info < (3, 0):  # Pandas 1.0.0 does not support Python 2
+        return 'any'
+
+    if isinstance(df_column.dtype, pd.DatetimeTZDtype):
+        return 'datetime',
+    elif (isinstance(df_column.dtype, pd.StringDtype) or
+          isinstance(df_column.dtype, pd.BooleanDtype) or
+          isinstance(df_column.dtype, pd.CategoricalDtype) or
+          isinstance(df_column.dtype, pd.PeriodDtype)):
+        return 'text'
+    elif (isinstance(df_column.dtype, pd.SparseDtype) or
+          isinstance(df_column.dtype, pd.IntervalDtype) or
+          isinstance(df_column.dtype, pd.Int8Dtype) or
+          isinstance(df_column.dtype, pd.Int16Dtype) or
+          isinstance(df_column.dtype, pd.Int32Dtype) or
+          isinstance(df_column.dtype, pd.Int64Dtype)):
+        return 'numeric'
+    else:
+        return 'any'
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
@@ -30,6 +53,7 @@ postgresql_user = os.environ["POSTGRESQL_WRITER_USER"]
 postgresql_pwd = os.environ["POSTGRESQL_WRITER_PWD"]
 postgresql_db = os.environ["POSTGRESQL_DATABASE"]
 
+# Connect to the postgresql database
 postgresql_string_connecion = f'postgresql://{postgresql_user}:{postgresql_pwd}@{postgresql_host}:{postgresql_port}/{postgresql_db}?sslmode=require'
 pg_engine = create_engine(postgresql_string_connecion)
 
@@ -37,7 +61,9 @@ pg_engine = create_engine(postgresql_string_connecion)
 df_supplier = pd.read_sql(f'SELECT * FROM test_supplier', pg_engine)
 postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
                                                  data=df_supplier.to_dict('records'),
-                                                 columns=[{"name": i, "id": i, "selectable": True} for i in df_supplier.columns],
+                                                 columns=[{"name": i, "id": i, "selectable": True,
+                                                           'type': table_type(df_supplier[i])} for i in
+                                                          df_supplier.columns],
                                                  cell_selectable=True,
                                                  style_cell={'textAlign': 'center'},
                                                  sort_action='native',
@@ -50,9 +76,10 @@ postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
                                                  style_table={'overflowX': 'scroll'},
                                                  )
 
+# Get cart data
 df_cart = pd.read_sql(f'SELECT * FROM  test_cart', pg_engine)
 
-#
+# Define the additional columns component
 df_additional_cols = pd.DataFrame(OrderedDict([
     ('nouvelle_colonne', ['nouveau_prix']),
     ('colonne1', ["Tarif1"]),
@@ -60,13 +87,27 @@ df_additional_cols = pd.DataFrame(OrderedDict([
     ('colonne2', ["Quantité de réception"]),
 ]))
 
+# Define final schema table
+final_data = []
+final_data_dict = {}
+for col_name in df_cart.columns.tolist():
+    final_data_dict[col_name] = ""
+final_data.append(final_data_dict)
+
+# Define the final schema table component
+output_schema_table = dash_table.DataTable(id="output_schema_table",
+                                           data=final_data,
+                                           columns=[{"name": i, "id": i} for i in final_data[0].keys()],
+                                           style_cell={'textAlign': 'center'},
+                                           style_table={'overflowX': 'scroll'},
+                                           )
 
 
 @app.callback(Output(component_id='cart_data', component_property='children'),
               [Input(component_id='refresh', component_property='n_clicks')])
-def populate_datatable(refresh):
+def populate_cart_table(refresh):
     dt_cart = dash_table.DataTable(df_cart.to_dict('records'),
-                                   [{"name": i, "id": i} for i in df_cart.columns],
+                                   [{"name": i, "id": i, 'type': table_type(df_cart[i])} for i in df_cart.columns],
                                    cell_selectable=True,
                                    style_cell={'textAlign': 'center'},
                                    sort_action='native',
@@ -78,24 +119,17 @@ def populate_datatable(refresh):
 
 @app.callback(Output(component_id='postgresql_supplier_table', component_property='data'),
               [Input(component_id='refresh', component_property='n_clicks')])
-def populate_supplier_datatable(refresh):
+def populate_supplier_table(refresh):
     df_supplier_data = pd.read_sql(f'SELECT * FROM test_supplier', pg_engine)
     return df_supplier_data.to_dict('records')
 
 
 @app.callback(
     Output(component_id="output_supplier_choices", component_property="children"),
-    [Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
-     Input(component_id='postgresql_supplier_table', component_property='derived_virtual_indices'),
-     Input(component_id='submit', component_property='n_clicks')],
+    [Input(component_id='postgresql_supplier_table', component_property='selected_rows')],
 )
-def load_pages(rows, selected_row_indices, submit):
-    selected_id_set = set(selected_row_indices or [])
+def show_selected_file_name(rows):
     if rows:
-        print("=====================================")
-        print(selected_id_set)
-        print(rows)
-        print(df_supplier.loc[rows])
         return f"The selected files are: {df_supplier.loc[rows][['NomFichier']].values.tolist()}"
     else:
         return ""
@@ -105,26 +139,20 @@ def load_pages(rows, selected_row_indices, submit):
     Output('output_columns', 'children'),
     Input('postgresql_supplier_table', 'selected_columns')
 )
-def update_styles(selected_columns):
+def show_selected_cols(selected_columns):
     if selected_columns:
-        return "Selected columns are: {}".format(selected_columns)
+        return "Selected generic columns are: {}".format(selected_columns)
     else:
         return ""
 
 
 @app.callback(
-    Output('additional_cols', 'children'),
-    [Input('postgresql_supplier_table', 'selected_columns'),
-     Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
-     Input(component_id='postgresql_supplier_table', component_property='derived_virtual_indices')]
+    Output(component_id='additional_cols', component_property='children'),
+    [Input(component_id='postgresql_supplier_table', component_property='selected_columns'),
+     Input(component_id='postgresql_supplier_table', component_property='selected_rows')]
 )
-def update_styles(selected_columns, rows, selected_row_indices):
-    selected_id_set = set(selected_row_indices or [])
+def show_selected_file_and_true_col(selected_columns, rows):
     if rows and selected_columns:
-        print("=====================================")
-        print(selected_id_set)
-        print(rows)
-        print(df_supplier.loc[rows])
         return f"The selected files are: {df_supplier.loc[rows][['NomFichier']].values.tolist()} " \
                f"and Selected columns are: {df_supplier.loc[rows][selected_columns].values.tolist()}"
 
@@ -132,25 +160,47 @@ def update_styles(selected_columns, rows, selected_row_indices):
         return ""
 
 
-
-@app.callback(Output(component_id='output_schema', component_property='children'),
-              [Input(component_id='refresh', component_property='n_clicks'),
-               Input('postgresql_supplier_table', 'selected_columns'),
+@app.callback(Output(component_id='output_schema_table', component_property='data'),
+              Output(component_id='output_schema_table', component_property='columns'),
+              [
+               Input(component_id='postgresql_supplier_table', component_property='selected_columns'),
                Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
-               Input(component_id='postgresql_supplier_table', component_property='derived_virtual_indices'),
                Input(component_id='table-dropdown', component_property='data')
                ])
-def populate_output_schema(refresh, selected_columns, rows, selected_row_indices, data):
-    list_cols = df_cart.columns.tolist()
-    print(data)
-
+def populate_output_schema(selected_columns, rows, data):
+    new_output = [final_data_dict.copy()]
     if rows and selected_columns:
-        print("============NEEEEEEWWWWWWW=========================")
-        list_cols.extend(df_supplier.loc[rows][selected_columns].values.tolist()[0])
-        print(list_cols)
-        print("============FIIIIIINNNNNN=========================")
+        col_values = df_supplier.loc[rows][selected_columns].values.tolist()
+        list_infos = df_supplier.loc[rows][['Marque', 'Founisseur', "DateEffective", "DateReception"]].values.tolist()
 
-    return list_cols
+        for info in list_infos:
+            new_output[0]['_'.join(info)] = ''
+
+        for tmp in col_values:
+            for col_tmp in tmp:
+                new_output[0][col_tmp] = ''
+        # Add data from additional columns
+        if data:
+            for elmt in data:
+                if elmt["nouvelle_colonne"]:
+                    new_output[0][elmt["nouvelle_colonne"]] = ''
+
+        return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
+
+    if data:
+        for elmt in data:
+            if elmt["nouvelle_colonne"]:
+                new_output[0][elmt["nouvelle_colonne"]] = ''
+    return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
+
+
+@app.callback(
+    Output(component_id="table-dropdown", component_property="selected_cells"),
+    Output(component_id="table-dropdown", component_property="active_cell"),
+    Input(component_id="clear", component_property="n_clicks"),
+)
+def clear(n_clicks):
+    return [], None
 
 
 @app.callback(
@@ -171,6 +221,8 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(postgresql_supplier_table, style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
     html.P("Ajouter des colonnes pour l'analyse"),
+    dbc.Row(html.Button("clear selection", id="clear")),
+    dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dash_table.DataTable(
         id='table-dropdown',
         data=df_additional_cols.to_dict('records'),
@@ -181,6 +233,7 @@ app.layout = dbc.Container(fluid=True, children=[
             {'id': 'colonne2', 'name': 'colonne2', 'presentation': 'dropdown'},
         ],
         editable=True,
+        row_deletable=True,
         dropdown={
             'colonne1': {
                 'options': [
@@ -203,7 +256,8 @@ app.layout = dbc.Container(fluid=True, children=[
         }
     ), style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
-    html.Button('Add Row', id='editing-rows-button', n_clicks=0),
+    dbc.Row(html.Button('Add Row', id='editing-rows-button', n_clicks=0)),
+
 
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dbc.Button("Submit", id='submit', color="primary", className="mr-1", n_clicks=0)),
@@ -215,7 +269,14 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(dcc.Markdown(id="output_columns"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown(id="additional_cols"), ),
-    dbc.Row(dcc.Markdown(id="output_schema"), style={'margin-left': '2%', 'margin-right': '2%', }),
+    #dbc.Row(dcc.Markdown(id="output_schema"), style={'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(dcc.Markdown("Schéma attendu de l'analyse"), ),
+    dbc.Row(output_schema_table, style={'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.Br(), class_name=".mb-4"),
 
     dbc.Row(html.Br(), class_name=".mb-4"),
