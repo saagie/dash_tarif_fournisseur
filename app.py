@@ -39,6 +39,41 @@ def table_type(df_column):
     else:
         return 'any'
 
+
+operators = [['>='],
+             ['<='],
+             ['<'],
+             ['>'],
+             ['!='],
+             ['='],
+             ['contains '],
+             ['datestartswith ']]
+
+
+def split_filter_part(filter_part):
+    for operator_type in operators:
+        for operator in operator_type:
+            if operator in filter_part:
+                name_part, value_part = filter_part.split(operator, 1)
+                name = name_part[name_part.find('{') + 1: name_part.rfind('}')]
+
+                value_part = value_part.strip()
+                v0 = value_part[0]
+                if v0 == value_part[-1] and v0 in ("'", '"', '`'):
+                    value = value_part[1: -1].replace('\\' + v0, v0)
+                else:
+                    try:
+                        value = float(value_part)
+                    except ValueError:
+                        value = value_part
+
+                # word operators need spaces after them in the filter string,
+                # but we don't want these later
+                return name, operator_type[0].strip(), value
+
+    return [None] * 3
+
+
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
 # app = dash.Dash(__name__, external_stylesheets=external_stylesheets, url_base_pathname=os.environ["SAAGIE_BASE_PATH"]+"/")
@@ -78,6 +113,15 @@ postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
 
 # Get cart data
 df_cart = pd.read_sql(f'SELECT * FROM  test_cart', pg_engine)
+dt_cart = dash_table.DataTable(id="postgresql_cart_table",
+                               data=df_cart.to_dict('records'),
+                               columns=[{"name": i, "id": i, 'type': table_type(df_cart[i])} for i in df_cart.columns],
+                               cell_selectable=True,
+                               style_cell={'textAlign': 'center'},
+                               sort_action='native',
+                               filter_action='native',
+                               page_size=20,
+                               style_table={'overflowX': 'scroll'}, )
 
 # Define the additional columns component
 df_additional_cols = pd.DataFrame(OrderedDict([
@@ -103,18 +147,11 @@ output_schema_table = dash_table.DataTable(id="output_schema_table",
                                            )
 
 
-@app.callback(Output(component_id='cart_data', component_property='children'),
+@app.callback(Output(component_id='postgresql_cart_table', component_property='data'),
               [Input(component_id='refresh', component_property='n_clicks')])
 def populate_cart_table(refresh):
-    dt_cart = dash_table.DataTable(df_cart.to_dict('records'),
-                                   [{"name": i, "id": i, 'type': table_type(df_cart[i])} for i in df_cart.columns],
-                                   cell_selectable=True,
-                                   style_cell={'textAlign': 'center'},
-                                   sort_action='native',
-                                   filter_action='native',
-                                   page_size=20,
-                                   style_table={'overflowX': 'scroll'}, )
-    return dt_cart
+    df_cart_data = pd.read_sql(f'SELECT * FROM test_cart', pg_engine)
+    return df_cart_data.to_dict('records')
 
 
 @app.callback(Output(component_id='postgresql_supplier_table', component_property='data'),
@@ -163,10 +200,10 @@ def show_selected_file_and_true_col(selected_columns, rows):
 @app.callback(Output(component_id='output_schema_table', component_property='data'),
               Output(component_id='output_schema_table', component_property='columns'),
               [
-               Input(component_id='postgresql_supplier_table', component_property='selected_columns'),
-               Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
-               Input(component_id='table-dropdown', component_property='data')
-               ])
+                  Input(component_id='postgresql_supplier_table', component_property='selected_columns'),
+                  Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
+                  Input(component_id='table-dropdown', component_property='data')
+              ])
 def populate_output_schema(selected_columns, rows, data):
     new_output = [final_data_dict.copy()]
     if rows and selected_columns:
@@ -214,9 +251,29 @@ def add_row(n_clicks, rows, columns):
     return rows
 
 
+
+@app.callback(
+    Output('output_cart_filter', 'children'),
+
+    Input('postgresql_cart_table', 'filter_query'))
+def update_table(filter):
+    output_string = ""
+    if filter:
+        print(filter)
+        filtering_expressions = filter.split(' && ')
+        print(filtering_expressions)
+        for filter_part in filtering_expressions:
+            filter_col_name, operator, filter_value = split_filter_part(filter_part)
+            print(f"col_name: {filter_col_name}, operator: {operator}, filter_value: {filter_value}")
+            output_string += f"col_name: {filter_col_name}, operator: {operator}, filter_value: {filter_value} \n"
+        return output_string
+    else:
+        return output_string
+
+
 app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(html.P('Données paniers')),
-    dbc.Row(id="cart_data", style={'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(dt_cart, style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.P('Données fournisseurs')),
     dbc.Row(postgresql_supplier_table, style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
@@ -258,7 +315,6 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.Button('Add Row', id='editing-rows-button', n_clicks=0)),
 
-
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dbc.Button("Submit", id='submit', color="primary", className="mr-1", n_clicks=0)),
     dbc.Row(html.Br(), class_name=".mb-4"),
@@ -269,7 +325,7 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(dcc.Markdown(id="output_columns"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown(id="additional_cols"), ),
-    #dbc.Row(dcc.Markdown(id="output_schema"), style={'margin-left': '2%', 'margin-right': '2%', }),
+    # dbc.Row(dcc.Markdown(id="output_schema"), style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown("Schéma attendu de l'analyse"), ),
     dbc.Row(output_schema_table, style={'margin-left': '2%', 'margin-right': '2%', }),
@@ -278,7 +334,8 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.Br(), class_name=".mb-4"),
-
+    dbc.Row(dcc.Markdown("Test affichage des filtres sur données panier: "), ),
+    dbc.Row(dcc.Markdown(id="output_cart_filter", style={"white-space": "pre", },), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
 
 ])
