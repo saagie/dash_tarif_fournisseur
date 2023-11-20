@@ -1,9 +1,7 @@
 from collections import OrderedDict
 
 import dash
-from dash import dcc
-from dash import html
-from dash.dependencies import Input, Output
+from dash import Dash, dcc, html, Input, Output, State, MATCH, Patch, callback, ctx
 import plotly.express as px
 import os
 from dash import dash_table
@@ -94,19 +92,20 @@ pg_engine = create_engine(postgresql_string_connecion)
 
 # Define the postgresql_supplier_table component
 df_supplier = pd.read_sql(f'SELECT * FROM test_supplier', pg_engine)
+cols_metadata = ["NomFichier", "Marque", "Founisseur",
+                 "DateEffective", "DateReception"]
+
 postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
-                                                 data=df_supplier.to_dict('records'),
+                                                 data=df_supplier[cols_metadata].to_dict('records'),
                                                  columns=[{"name": i, "id": i, "selectable": True,
                                                            'type': table_type(df_supplier[i])} for i in
-                                                          df_supplier.columns],
+                                                          cols_metadata],
                                                  cell_selectable=True,
                                                  style_cell={'textAlign': 'center'},
                                                  sort_action='native',
                                                  filter_action='native',
                                                  page_size=20,
                                                  row_selectable='multi',
-                                                 column_selectable='multi',
-                                                 selected_columns=[],
                                                  selected_rows=[],
                                                  style_table={'overflowX': 'scroll'},
                                                  )
@@ -146,6 +145,21 @@ output_schema_table = dash_table.DataTable(id="output_schema_table",
                                            style_table={'overflowX': 'scroll'},
                                            )
 
+# Define the selected supplier files component
+selected_supplier_files_table = dash_table.DataTable(id="selected_supplier_files_table",
+                                                     data=[{"selected_files": "tarif_fournisseur_23103110150056",
+                                                            "selected_columns": "Venice"}],
+                                                     columns=[
+                                                         {'id': 'selected_files', 'name': 'selected_files', },
+                                                         {'id': 'selected_columns', 'name': 'selected_columns',
+                                                          'presentation': 'dropdown'}
+                                                     ],
+                                                     
+                                                     style_cell={'textAlign': 'center'},
+                                                     editable=True,
+                                                     row_deletable=True,
+                                                     )
+
 
 @app.callback(Output(component_id='postgresql_cart_table', component_property='data'),
               [Input(component_id='refresh', component_property='n_clicks')])
@@ -170,6 +184,83 @@ def show_selected_file_name(rows):
         return f"The selected files are: {df_supplier.loc[rows][['NomFichier']].values.tolist()}"
     else:
         return ""
+
+
+@app.callback(
+    Output(component_id="output_div", component_property="children"),
+
+    [Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
+     Input(component_id='submit', component_property='n_clicks'),
+     ],
+)
+def show_selected_file_name(rows, n_clicks):
+    """
+
+    """
+    #TODO
+    patched_children = Patch()
+    print(f"n_clicks :{n_clicks}")
+
+    # if n_clicks:
+    if ctx.triggered_id == "submit":
+
+        """
+        new_element = html.Div([
+        dcc.Dropdown(
+            ['NYC', 'MTL', 'LA', 'TOKYO'],
+            id={
+                'type': 'city-dynamic-dropdown',
+                'index': n_clicks
+            }
+        ),
+        html.Div(
+            id={
+                'type': 'city-dynamic-output',
+                'index': n_clicks
+            }
+        )
+    ])
+    patched_children.append(new_element)
+        """
+
+
+        
+        print("hello")
+        list_noms_fichiers = df_supplier.loc[rows][['NomFichier']].values.tolist()
+        list_noms_cols = df_supplier.loc[rows, [c for c in df_supplier.columns if c not in cols_metadata]].values.tolist()
+
+        df = pd.DataFrame(list_noms_fichiers, columns=['selected_files'])
+        df["selected_columns"] = list_noms_cols
+        print(f"df: \n {df}")
+
+        for index, row in df.iterrows():
+            print(f"row: {row}")
+
+        #for row in list_noms_fichiers:
+
+            # à voir si on peut check sur l'existence du champs pour ne pas le recréer à chaque fois
+
+            new_element = html.Div([
+                html.Div(
+                    row["selected_files"],
+                    id={
+                        'type': 'dynamic-output',
+                        'index': n_clicks
+                    },
+                ),
+                dcc.Dropdown(
+                    options=row["selected_columns"],
+                    id={
+                        'type': 'dynamic-dropdown',
+                        'index': n_clicks
+                    },
+                    multi=True,
+                ),
+                html.Br(),
+            ])
+            patched_children.append(new_element)
+
+        return patched_children
 
 
 @app.callback(
@@ -202,9 +293,12 @@ def show_selected_file_and_true_col(selected_columns, rows):
               [
                   Input(component_id='postgresql_supplier_table', component_property='selected_columns'),
                   Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
-                  Input(component_id='table-dropdown', component_property='data')
+                  Input({'type': 'dynamic-dropdown', 'index': MATCH}, 'value'),
+                  Input({'type': 'dynamic-output', 'index': MATCH}, 'value'),
+                  State({'type': 'dynamic-dropdown', 'index': MATCH}, 'id'),
+                  State({'type': 'dynamic-output', 'index': MATCH}, 'id'),
               ])
-def populate_output_schema(selected_columns, rows, data):
+def populate_output_schema(selected_columns, rows, value_dropdown, value_output, id_dropdown, id_output):
     new_output = [final_data_dict.copy()]
     if rows and selected_columns:
         col_values = df_supplier.loc[rows][selected_columns].values.tolist()
@@ -216,18 +310,10 @@ def populate_output_schema(selected_columns, rows, data):
         for tmp in col_values:
             for col_tmp in tmp:
                 new_output[0][col_tmp] = ''
-        # Add data from additional columns
-        if data:
-            for elmt in data:
-                if elmt["nouvelle_colonne"]:
-                    new_output[0][elmt["nouvelle_colonne"]] = ''
+
 
         return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
 
-    if data:
-        for elmt in data:
-            if elmt["nouvelle_colonne"]:
-                new_output[0][elmt["nouvelle_colonne"]] = ''
     return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
 
 
@@ -249,7 +335,6 @@ def add_row(n_clicks, rows, columns):
     if n_clicks > 0:
         rows.append({c['id']: '' for c in columns})
     return rows
-
 
 
 @app.callback(
@@ -274,9 +359,19 @@ def update_table(filter):
 app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(html.P('Données paniers')),
     dbc.Row(dt_cart, style={'margin-left': '2%', 'margin-right': '2%', }),
-    dbc.Row(html.P('Données fournisseurs')),
+    dbc.Row(html.P('Veuillez choisir un ou plusieurs fichiers fournisseurs: ')),
     dbc.Row(postgresql_supplier_table, style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(dbc.Button("Submit", id='submit', color="primary", className="mr-1", n_clicks=0)),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    html.Div(id="output_div", children=[]),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(dcc.Markdown(id="test"), ),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(dcc.Markdown("Schéma attendu de l'analyse"), ),
+    dbc.Row(output_schema_table, style={'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+
     html.P("Ajouter des colonnes pour l'analyse"),
     dbc.Row(html.Button("clear selection", id="clear")),
     dbc.Row(html.Br(), class_name=".mb-4"),
@@ -316,26 +411,28 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(html.Button('Add Row', id='editing-rows-button', n_clicks=0)),
 
     dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(dbc.Button("Submit", id='submit', color="primary", className="mr-1", n_clicks=0)),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dbc.Button("Refresh", id='refresh', color="primary", className="mr-1", n_clicks=0)),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown(id="output_supplier_choices"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
+
+    
     dbc.Row(dcc.Markdown(id="output_columns"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown(id="additional_cols"), ),
     # dbc.Row(dcc.Markdown(id="output_schema"), style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(dcc.Markdown("Schéma attendu de l'analyse"), ),
-    dbc.Row(output_schema_table, style={'margin-left': '2%', 'margin-right': '2%', }),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(html.Br(), class_name=".mb-4"),
+
     dbc.Row(dcc.Markdown("Test affichage des filtres sur données panier: "), ),
-    dbc.Row(dcc.Markdown(id="output_cart_filter", style={"white-space": "pre", },), ),
+    dbc.Row(dcc.Markdown(id="output_cart_filter", style={"white-space": "pre", }, ), ),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(dcc.Markdown("Test affichage des filtres sur données fournisseur: "), ),
+    dbc.Row(selected_supplier_files_table, style={'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.Br(), class_name=".mb-4"),
 
 ])
