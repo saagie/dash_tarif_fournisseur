@@ -9,6 +9,7 @@ from dash import dash_table
 from dash import dcc, html, Patch, ctx, ALL
 from dash.dependencies import Input, Output, State
 from sqlalchemy import create_engine
+from datetime import datetime
 
 
 # Define data type
@@ -87,6 +88,10 @@ postgresql_db = os.environ["POSTGRESQL_DATABASE"]
 # Connect to the postgresql database
 postgresql_string_connecion = f'postgresql://{postgresql_user}:{postgresql_pwd}@{postgresql_host}:{postgresql_port}/{postgresql_db}?sslmode=require'
 pg_engine = create_engine(postgresql_string_connecion)
+
+# postgresql table name
+# TODO: change to env var: $POSTGRESQL_ANALYSE_TABLE
+pg_analyse_table = "test_analyse_panier_fournisseur"
 
 # Define the postgresql_supplier_table component
 df_supplier = pd.read_sql(f'SELECT * FROM test_supplier', pg_engine)
@@ -255,6 +260,7 @@ def update_table(filter_expression):
 def submit_to_job(filter_expression, n_click, value_dropdown, value_output):
     list_filter_query = []
     list_file_column = []
+    dict_result = {}
     if filter_expression:
         print(filter_expression)
         filtering_expressions = filter_expression.split(' && ')
@@ -264,17 +270,30 @@ def submit_to_job(filter_expression, n_click, value_dropdown, value_output):
             print(f"col_name: {filter_col_name}, operator: {operator}, filter_value: {filter_value}")
             list_filter_query.append(
                 {"col_name": filter_col_name, "operator": operator, "filter_value": filter_value})
+            # structure de la table
+            # date_analyse | filtres_panier (text) | fichiers_fournisseurs (text) | colonnes_fournisseurs (text) | already_done (bool) | nom_fichier_final (text)
+            #[{'nom_fichier': 'fichier1', 'colonnes': ['col1', 'col2', 'col3']}, 
+            #{'nom_fichier': 'fichier2', 'colonnes': ['col1', 'col2', 'col3']}]
+        dict_result["filtres_panier"] = list_filter_query
     if ctx.triggered_id == "final_submit" and value_dropdown and value_output:
-        print(f"list_filter_query: {list_filter_query}")
-        print(f"value_dropdown: {value_dropdown}")
-        print(f"value_output: {value_output}")
-        for i in range(len(value_output)):
-            print(f"{value_output[i]}: {value_dropdown[i]}")
-            list_file_column.append({value_output[i]: value_dropdown[i]})
-        # envoie sur pg dans une table:
-        return str(list_filter_query) + "\n" + str(list_file_column)
+        dict_result["date_analyse"] = datetime.now()
+        dict_result["fichiers_fournisseurs"] = value_output
 
-    return str(list_filter_query)
+        for i in range(len(value_output)):
+            print(f"'nom_fichier': {value_output[i]}, 'colonnes': {value_dropdown[i]}")
+            list_file_column.append({f"'nom_fichier': {value_output[i]}, 'colonnes': {value_dropdown[i]}"})
+        # envoie sur pg dans une table:
+        dict_result["colonnes_fournisseurs"] = list_file_column
+        dict_result["already_done"] = False
+        dict_result["nom_fichier_final"] = None
+        df = pd.DataFrame([dict_result])
+        with pg_engine.connect() as conn_pg:
+            with conn_pg.begin():
+                df.to_sql(pg_analyse_table, pg_engine, if_exists="append", index=False)
+                # call API pour lancer le job
+        return "Insertion dans la table pg_analyse_table réussie, l'analyse va bientôt démarrer."
+
+    return ""
 
 
 app.layout = dbc.Container(fluid=True, children=[
