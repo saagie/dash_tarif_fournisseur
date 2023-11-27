@@ -1,16 +1,14 @@
+import os
+import sys
 from collections import OrderedDict
 
 import dash
-from dash import Dash, dcc, html, Input, Output, State, MATCH, Patch, callback, ctx
-import plotly.express as px
-import os
-from dash import dash_table
-from sqlalchemy import create_engine
-import dash
-from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
-import sys
 import pandas as pd
+from dash import dash_table
+from dash import dcc, html, Patch, ctx, ALL
+from dash.dependencies import Input, Output, State
+from sqlalchemy import create_engine
 
 
 # Define data type
@@ -145,21 +143,6 @@ output_schema_table = dash_table.DataTable(id="output_schema_table",
                                            style_table={'overflowX': 'scroll'},
                                            )
 
-# Define the selected supplier files component
-selected_supplier_files_table = dash_table.DataTable(id="selected_supplier_files_table",
-                                                     data=[{"selected_files": "tarif_fournisseur_23103110150056",
-                                                            "selected_columns": "Venice"}],
-                                                     columns=[
-                                                         {'id': 'selected_files', 'name': 'selected_files', },
-                                                         {'id': 'selected_columns', 'name': 'selected_columns',
-                                                          'presentation': 'dropdown'}
-                                                     ],
-                                                     
-                                                     style_cell={'textAlign': 'center'},
-                                                     editable=True,
-                                                     row_deletable=True,
-                                                     )
-
 
 @app.callback(Output(component_id='postgresql_cart_table', component_property='data'),
               [Input(component_id='refresh', component_property='n_clicks')])
@@ -176,17 +159,6 @@ def populate_supplier_table(refresh):
 
 
 @app.callback(
-    Output(component_id="output_supplier_choices", component_property="children"),
-    [Input(component_id='postgresql_supplier_table', component_property='selected_rows')],
-)
-def show_selected_file_name(rows):
-    if rows:
-        return f"The selected files are: {df_supplier.loc[rows][['NomFichier']].values.tolist()}"
-    else:
-        return ""
-
-
-@app.callback(
     Output(component_id="output_div", component_property="children"),
 
     [Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
@@ -197,47 +169,20 @@ def show_selected_file_name(rows, n_clicks):
     """
 
     """
-    #TODO
     patched_children = Patch()
-    print(f"n_clicks :{n_clicks}")
-
-    # if n_clicks:
     if ctx.triggered_id == "submit":
-
-        """
-        new_element = html.Div([
-        dcc.Dropdown(
-            ['NYC', 'MTL', 'LA', 'TOKYO'],
-            id={
-                'type': 'city-dynamic-dropdown',
-                'index': n_clicks
-            }
-        ),
-        html.Div(
-            id={
-                'type': 'city-dynamic-output',
-                'index': n_clicks
-            }
-        )
-    ])
-    patched_children.append(new_element)
-        """
-
-
-        
-        print("hello")
         list_noms_fichiers = df_supplier.loc[rows][['NomFichier']].values.tolist()
-        list_noms_cols = df_supplier.loc[rows, [c for c in df_supplier.columns if c not in cols_metadata]].values.tolist()
+        print(f"list_noms_fichiers: {list_noms_fichiers}")
+        # for nom_fichier in list_noms_fichiers:
+        #
+
+
+        list_noms_cols = df_supplier.loc[
+            rows, [c for c in df_supplier.columns if c not in cols_metadata]].values.tolist()
 
         df = pd.DataFrame(list_noms_fichiers, columns=['selected_files'])
         df["selected_columns"] = list_noms_cols
-        print(f"df: \n {df}")
-
         for index, row in df.iterrows():
-            print(f"row: {row}")
-
-        #for row in list_noms_fichiers:
-
             # à voir si on peut check sur l'existence du champs pour ne pas le recréer à chaque fois
 
             new_element = html.Div([
@@ -245,7 +190,7 @@ def show_selected_file_name(rows, n_clicks):
                     row["selected_files"],
                     id={
                         'type': 'dynamic-output',
-                        'index': n_clicks
+                        'index': row["selected_files"]
                     },
                 ),
                 dcc.Dropdown(
@@ -263,89 +208,33 @@ def show_selected_file_name(rows, n_clicks):
         return patched_children
 
 
-@app.callback(
-    Output('output_columns', 'children'),
-    Input('postgresql_supplier_table', 'selected_columns')
-)
-def show_selected_cols(selected_columns):
-    if selected_columns:
-        return "Selected generic columns are: {}".format(selected_columns)
-    else:
-        return ""
-
-
-@app.callback(
-    Output(component_id='additional_cols', component_property='children'),
-    [Input(component_id='postgresql_supplier_table', component_property='selected_columns'),
-     Input(component_id='postgresql_supplier_table', component_property='selected_rows')]
-)
-def show_selected_file_and_true_col(selected_columns, rows):
-    if rows and selected_columns:
-        return f"The selected files are: {df_supplier.loc[rows][['NomFichier']].values.tolist()} " \
-               f"and Selected columns are: {df_supplier.loc[rows][selected_columns].values.tolist()}"
-
-    else:
-        return ""
-
-
 @app.callback(Output(component_id='output_schema_table', component_property='data'),
               Output(component_id='output_schema_table', component_property='columns'),
-              [
-                  Input(component_id='postgresql_supplier_table', component_property='selected_columns'),
-                  Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
-                  Input({'type': 'dynamic-dropdown', 'index': MATCH}, 'value'),
-                  Input({'type': 'dynamic-output', 'index': MATCH}, 'value'),
-                  State({'type': 'dynamic-dropdown', 'index': MATCH}, 'id'),
-                  State({'type': 'dynamic-output', 'index': MATCH}, 'id'),
-              ])
-def populate_output_schema(selected_columns, rows, value_dropdown, value_output, id_dropdown, id_output):
+              [Input(component_id='final_submit', component_property='n_clicks'),
+               Input({'type': 'dynamic-dropdown', 'index': ALL}, 'value'),
+               Input({'type': 'dynamic-output', 'index': ALL}, 'children'),
+               State({'type': 'dynamic-dropdown', 'index': ALL}, 'id'),
+               State({'type': 'dynamic-output', 'index': ALL}, 'id'),
+               ])
+def populate_output_schema(submit, value_dropdown, value_output, id_dropdown, id_output):
     new_output = [final_data_dict.copy()]
-    if rows and selected_columns:
-        col_values = df_supplier.loc[rows][selected_columns].values.tolist()
-        list_infos = df_supplier.loc[rows][['Marque', 'Founisseur', "DateEffective", "DateReception"]].values.tolist()
-
-        for info in list_infos:
-            new_output[0]['_'.join(info)] = ''
-
-        for tmp in col_values:
-            for col_tmp in tmp:
-                new_output[0][col_tmp] = ''
-
-
+    if ctx.triggered_id == "final_submit" and value_dropdown and value_output:
+        print(f"value_dropdown: {value_dropdown}")
+        print(f"value_output: {value_output}")
         return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
 
     return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
 
 
 @app.callback(
-    Output(component_id="table-dropdown", component_property="selected_cells"),
-    Output(component_id="table-dropdown", component_property="active_cell"),
-    Input(component_id="clear", component_property="n_clicks"),
-)
-def clear(n_clicks):
-    return [], None
-
-
-@app.callback(
-    Output('table-dropdown', 'data'),
-    Input('editing-rows-button', 'n_clicks'),
-    State('table-dropdown', 'data'),
-    State('table-dropdown', 'columns'))
-def add_row(n_clicks, rows, columns):
-    if n_clicks > 0:
-        rows.append({c['id']: '' for c in columns})
-    return rows
-
-
-@app.callback(
     Output('output_cart_filter', 'children'),
 
     Input('postgresql_cart_table', 'filter_query'))
-def update_table(filter):
+def update_table(filter_expression):
     output_string = ""
-    if filter:
-        print(filter)
-        filtering_expressions = filter.split(' && ')
+    if filter_expression:
+        print(filter_expression)
+        filtering_expressions = filter_expression.split(' && ')
         print(filtering_expressions)
         for filter_part in filtering_expressions:
             filter_col_name, operator, filter_value = split_filter_part(filter_part)
@@ -356,59 +245,60 @@ def update_table(filter):
         return output_string
 
 
+@app.callback(
+    Output('test', 'children'),
+    Input('postgresql_cart_table', 'filter_query'),
+    Input(component_id='final_submit', component_property='n_clicks'),
+    Input({'type': 'dynamic-dropdown', 'index': ALL}, 'value'),
+    Input({'type': 'dynamic-output', 'index': ALL}, 'children'),
+)
+def submit_to_job(filter_expression, n_click, value_dropdown, value_output):
+    list_filter_query = []
+    list_file_column = []
+    if filter_expression:
+        print(filter_expression)
+        filtering_expressions = filter_expression.split(' && ')
+        print(filtering_expressions)
+        for filter_part in filtering_expressions:
+            filter_col_name, operator, filter_value = split_filter_part(filter_part)
+            print(f"col_name: {filter_col_name}, operator: {operator}, filter_value: {filter_value}")
+            list_filter_query.append(
+                {"col_name": filter_col_name, "operator": operator, "filter_value": filter_value})
+    if ctx.triggered_id == "final_submit" and value_dropdown and value_output:
+        print(f"list_filter_query: {list_filter_query}")
+        print(f"value_dropdown: {value_dropdown}")
+        print(f"value_output: {value_output}")
+        for i in range(len(value_output)):
+            print(f"{value_output[i]}: {value_dropdown[i]}")
+            list_file_column.append({value_output[i]: value_dropdown[i]})
+        # envoie sur pg dans une table:
+        return str(list_filter_query) + "\n" + str(list_file_column)
+
+    return str(list_filter_query)
+
+
 app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(html.P('Données paniers')),
     dbc.Row(dt_cart, style={'margin-left': '2%', 'margin-right': '2%', }),
+    dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(dcc.Markdown("Les filtres sur les données panier: "), ),
+    dbc.Row(dcc.Markdown(id="output_cart_filter", style={"white-space": "pre", }, ), ),
+    dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.P('Veuillez choisir un ou plusieurs fichiers fournisseurs: ')),
     dbc.Row(postgresql_supplier_table, style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dbc.Button("Submit", id='submit', color="primary", className="mr-1", n_clicks=0)),
     dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(html.P('Veuillez choisir le/les colonnes des fichiers fournisseurs: ')),
+    dbc.Row(html.Br(), class_name=".mb-4"),
     html.Div(id="output_div", children=[]),
     dbc.Row(html.Br(), class_name=".mb-4"),
+    dbc.Row(dbc.Button("Submit", id='final_submit', color="primary", className="mr-1", n_clicks=0)),
     dbc.Row(dcc.Markdown(id="test"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown("Schéma attendu de l'analyse"), ),
     dbc.Row(output_schema_table, style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
-
-    html.P("Ajouter des colonnes pour l'analyse"),
-    dbc.Row(html.Button("clear selection", id="clear")),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(dash_table.DataTable(
-        id='table-dropdown',
-        data=df_additional_cols.to_dict('records'),
-        columns=[
-            {'id': 'nouvelle_colonne', 'name': 'nouvelle_colonne', },
-            {'id': 'colonne1', 'name': 'colonne1', 'presentation': 'dropdown'},
-            {'id': 'operation', 'name': 'operation', 'presentation': 'dropdown'},
-            {'id': 'colonne2', 'name': 'colonne2', 'presentation': 'dropdown'},
-        ],
-        editable=True,
-        row_deletable=True,
-        dropdown={
-            'colonne1': {
-                'options': [
-                    {'label': i, 'value': i}
-                    for i in (df_cart.columns.tolist() + df_supplier.columns.tolist())
-                ]
-            },
-            'operation': {
-                'options': [
-                    {'label': i, 'value': i}
-                    for i in ['+', '-', '*', '/']
-                ]
-            },
-            'colonne2': {
-                'options': [
-                    {'label': i, 'value': i}
-                    for i in (df_cart.columns.tolist() + df_supplier.columns.tolist())
-                ]
-            }
-        }
-    ), style={'margin-left': '2%', 'margin-right': '2%', }),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(html.Button('Add Row', id='editing-rows-button', n_clicks=0)),
 
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.Br(), class_name=".mb-4"),
@@ -417,21 +307,12 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(dcc.Markdown(id="output_supplier_choices"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
 
-    
     dbc.Row(dcc.Markdown(id="output_columns"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown(id="additional_cols"), ),
     # dbc.Row(dcc.Markdown(id="output_schema"), style={'margin-left': '2%', 'margin-right': '2%', }),
     dbc.Row(html.Br(), class_name=".mb-4"),
 
-    dbc.Row(dcc.Markdown("Test affichage des filtres sur données panier: "), ),
-    dbc.Row(dcc.Markdown(id="output_cart_filter", style={"white-space": "pre", }, ), ),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(dcc.Markdown("Test affichage des filtres sur données fournisseur: "), ),
-    dbc.Row(selected_supplier_files_table, style={'margin-left': '2%', 'margin-right': '2%', }),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-
-    dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(html.Br(), class_name=".mb-4"),
 
