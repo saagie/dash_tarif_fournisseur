@@ -10,7 +10,30 @@ from dash import dcc, html, Patch, ctx, ALL
 from dash.dependencies import Input, Output, State
 from sqlalchemy import create_engine
 from datetime import datetime
+import boto3
+from io import StringIO
 
+def get_s3_client():
+    s3_endpoint = os.environ['AWS_S3_ENDPOINT']
+    s3_region = os.environ['AWS_REGION_NAME']
+    return boto3.client("s3", endpoint_url=s3_endpoint, region_name=s3_region)
+
+def list_objects(s3_client, bucket_name: str, prefix: str):
+    s3_result = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter="/")
+
+    if 'Contents' not in s3_result:
+        # print(s3_result)
+        return []
+
+    file_list = [key['Key'].replace(prefix, "") for key in s3_result['Contents']]
+    while s3_result['IsTruncated']:
+        continuation_key = s3_result['NextContinuationToken']
+        s3_result = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter="/",
+                                              ContinuationToken=continuation_key)
+        file_list.extend(
+            key['Key'].replace(prefix, "") for key in s3_result['Contents']
+        )
+    return file_list
 
 # Define data type
 def table_type(df_column):
@@ -85,9 +108,14 @@ postgresql_user = os.environ["POSTGRESQL_WRITER_USER"]
 postgresql_pwd = os.environ["POSTGRESQL_WRITER_PWD"]
 postgresql_db = os.environ["POSTGRESQL_DATABASE"]
 
+s3_bucket = os.environ['SUPPLIER_S3_BUCKET']
+s3_dir = os.environ['SUPPLIER_S3_PROCESSED_DIR']
+
 # Connect to the postgresql database
 postgresql_string_connecion = f'postgresql://{postgresql_user}:{postgresql_pwd}@{postgresql_host}:{postgresql_port}/{postgresql_db}?sslmode=require'
 pg_engine = create_engine(postgresql_string_connecion)
+
+s3_client = get_s3_client()
 
 # postgresql table name
 # TODO: change to env var: $POSTGRESQL_ANALYSE_TABLE
@@ -95,8 +123,19 @@ pg_analyse_table = "test_analyse_panier_fournisseur"
 
 # Define the postgresql_supplier_table component
 df_supplier = pd.read_sql(f'SELECT * FROM test_supplier', pg_engine)
-cols_metadata = ["NomFichier", "Marque", "Founisseur",
+cols_metadata = ["NomFichier", "Marque", "Fournisseur",
                  "DateEffective", "DateReception"]
+
+generic_columns_name = [
+    'Reference brute', 'Reference DTP', 'Information1', 'Information2',
+    'Information3', 'Information4', 'Information5', 'Information6',
+    'Information7', 'Information8', 'Information9', 'Information10',
+    'Coefficient1', 'Coefficient2', 'Coefficient3', 'Coefficient4',
+    'Coefficient5', 'Coefficient6', 'Coefficient7', 'Coefficient8',
+    'Coefficient9', 'Coefficient10', 'Tarif1', 'Tarif2', 'Tarif3', 'Tarif4',
+    'Tarif5', 'Tarif6', 'Tarif7', 'Tarif8', 'Tarif9', 'Tarif10',
+    'NomFichier', 'Marque', 'Founisseur', 'DateEffective', 'DateReception'
+]
 
 postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
                                                  data=df_supplier[cols_metadata].to_dict('records'),
@@ -178,17 +217,32 @@ def show_selected_file_name(rows, n_clicks):
     if ctx.triggered_id == "submit":
         list_noms_fichiers = df_supplier.loc[rows][['NomFichier']].values.tolist()
         print(f"list_noms_fichiers: {list_noms_fichiers}")
-        # for nom_fichier in list_noms_fichiers:
-        #
 
+        # files = list_objects(s3_client, s3_bucket, s3_dir)
 
         list_noms_cols = df_supplier.loc[
             rows, [c for c in df_supplier.columns if c not in cols_metadata]].values.tolist()
+        
+        temp_list_noms_cols = []
+
+        for c in list_noms_cols:
+            temp_c = []
+            for col in c:
+                if col.replace(" ", "") not in generic_columns_name:
+                    temp_c.append(col)
+            temp_list_noms_cols.append(temp_c)
 
         df = pd.DataFrame(list_noms_fichiers, columns=['selected_files'])
-        df["selected_columns"] = list_noms_cols
-        for index, row in df.iterrows():
+        # df["selected_columns"] = list_noms_cols
+        df["selected_columns"] = temp_list_noms_cols
+        for _, row in df.iterrows():
             # à voir si on peut check sur l'existence du champs pour ne pas le recréer à chaque fois
+
+            print(f'{s3_dir}{row["selected_files"]}.csv')
+            obj = s3_client.get_object(Bucket=s3_bucket, Key=f'{s3_dir}{row["selected_files"]}.csv')
+            file_content = obj['Body'].read().decode('utf-8')
+            df_file = pd.read_csv(StringIO(file_content), sep=",", encoding="utf-8")
+            print(df_file[row["selected_columns"]].head(5))
 
             new_element = html.Div([
                 html.Div(
@@ -198,13 +252,20 @@ def show_selected_file_name(rows, n_clicks):
                         'index': row["selected_files"]
                     },
                 ),
-                dcc.Dropdown(
-                    options=row["selected_columns"],
+                dash_table.DataTable(
                     id={
-                        'type': 'dynamic-dropdown',
+                        'type': 'dynamic-table',
                         'index': n_clicks
                     },
-                    multi=True,
+                    data=df_file[row["selected_columns"]].head(5).to_dict('records'),
+                    columns=[{"name": i, "id": i, "selectable": True} for i in row["selected_columns"]],
+                    column_selectable="multi",
+                    # cell_selectable=True,
+                    style_cell={'textAlign': 'center'},
+                    # sort_action='native',
+                    # filter_action='native',
+                    page_size=5,
+                    style_table={'overflowX': 'scroll'}, 
                 ),
                 html.Br(),
             ])
