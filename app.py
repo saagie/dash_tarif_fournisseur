@@ -220,6 +220,8 @@ def show_selected_file_name(rows, n_clicks):
 
         # files = list_objects(s3_client, s3_bucket, s3_dir)
 
+        print(f"df_supplier.columns : {df_supplier.columns}")
+
         list_noms_cols = df_supplier.loc[
             rows, [c for c in df_supplier.columns if c not in cols_metadata]].values.tolist()
         
@@ -239,9 +241,10 @@ def show_selected_file_name(rows, n_clicks):
             # à voir si on peut check sur l'existence du champs pour ne pas le recréer à chaque fois
 
             print(f'{s3_dir}{row["selected_files"]}.csv')
+            print(f'row["selected_columns"] : {row["selected_columns"]}')
             obj = s3_client.get_object(Bucket=s3_bucket, Key=f'{s3_dir}{row["selected_files"]}.csv')
             file_content = obj['Body'].read().decode('utf-8')
-            df_file = pd.read_csv(StringIO(file_content), sep=",", encoding="utf-8")
+            df_file = pd.read_csv(StringIO(file_content), sep=";", encoding="utf-8")
             print(df_file[row["selected_columns"]].head(5))
 
             new_element = html.Div([
