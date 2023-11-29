@@ -12,11 +12,14 @@ from sqlalchemy import create_engine
 from datetime import datetime
 import boto3
 from io import StringIO
+from saagieapi import SaagieApi
+
 
 def get_s3_client():
     s3_endpoint = os.environ['AWS_S3_ENDPOINT']
     s3_region = os.environ['AWS_REGION_NAME']
     return boto3.client("s3", endpoint_url=s3_endpoint, region_name=s3_region)
+
 
 def list_objects(s3_client, bucket_name: str, prefix: str):
     s3_result = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, Delimiter="/")
@@ -96,10 +99,8 @@ def split_filter_part(filter_part):
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
-# app = dash.Dash(__name__, external_stylesheets=external_stylesheets, url_base_pathname=os.environ["SAAGIE_BASE_PATH"]+"/")
-
-
-app = dash.Dash(__name__, external_stylesheets=external_stylesheets, suppress_callback_exceptions=True)
+app = dash.Dash(__name__, external_stylesheets=external_stylesheets,
+                url_base_pathname=os.environ["SAAGIE_BASE_PATH"]+"/", suppress_callback_exceptions=True)
 
 # Environment variables
 postgresql_host = os.environ["POSTGRESQL_IP"]
@@ -110,19 +111,29 @@ postgresql_db = os.environ["POSTGRESQL_DATABASE"]
 
 s3_bucket = os.environ['SUPPLIER_S3_BUCKET']
 s3_dir = os.environ['SUPPLIER_S3_PROCESSED_DIR']
+analyse_job_id = os.environ["ANALYSE_JOB_ID"]
 
 # Connect to the postgresql database
 postgresql_string_connecion = f'postgresql://{postgresql_user}:{postgresql_pwd}@{postgresql_host}:{postgresql_port}/{postgresql_db}?sslmode=require'
 pg_engine = create_engine(postgresql_string_connecion)
 
+# Connect to the s3 bucket
 s3_client = get_s3_client()
 
+# Connect to the saagie api
+saagie_client = SaagieApi(url_saagie=os.environ["SAAGIE_URL"],
+                          id_platform=os.environ["SAAGIE_PLATFORM_ID"],
+                          user=os.environ["TECHNICAL_SAAGIE_LOGIN"],
+                          password=os.environ["TECHNICAL_SAAGIE_PWD"],
+                          realm=os.environ["SAAGIE_REALM"])
 # postgresql table name
-# TODO: change to env var: $POSTGRESQL_ANALYSE_TABLE
-pg_analyse_table = "test_analyse_panier_fournisseur"
+pg_analyse_table = os.environ['POSTGRESQL_ANALYSE_TABLE']
+supplier_table_name = os.environ['SUPPLIER_TABLE_NAME']
+cart_table_name = os.environ['POSTGRESQL_CART_TABLE']
+
 
 # Define the postgresql_supplier_table component
-df_supplier = pd.read_sql(f'SELECT * FROM test_supplier', pg_engine)
+df_supplier = pd.read_sql(f'SELECT * FROM {supplier_table_name}', pg_engine)
 cols_metadata = ["NomFichier", "Marque", "Fournisseur",
                  "DateEffective", "DateReception"]
 
@@ -153,7 +164,7 @@ postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
                                                  )
 
 # Get cart data
-df_cart = pd.read_sql(f'SELECT * FROM  test_cart', pg_engine)
+df_cart = pd.read_sql(f'SELECT * FROM  {cart_table_name}', pg_engine)
 dt_cart = dash_table.DataTable(id="postgresql_cart_table",
                                data=df_cart.to_dict('records'),
                                columns=[{"name": i, "id": i, 'type': table_type(df_cart[i])} for i in df_cart.columns],
@@ -164,41 +175,34 @@ dt_cart = dash_table.DataTable(id="postgresql_cart_table",
                                page_size=20,
                                style_table={'overflowX': 'scroll'}, )
 
-# Define the additional columns component
-df_additional_cols = pd.DataFrame(OrderedDict([
-    ('nouvelle_colonne', ['nouveau_prix']),
-    ('colonne1', ["Tarif1"]),
-    ('operation', ["*"]),
-    ('colonne2', ["Quantité de réception"]),
-]))
-
 # Define final schema table
-final_data = []
-final_data_dict = {}
-for col_name in df_cart.columns.tolist():
-    final_data_dict[col_name] = ""
-final_data.append(final_data_dict)
+# final_data = []
+# final_data_dict = {}
+# for col_name in df_cart.columns.tolist():
+#     final_data_dict[col_name] = ""
+# final_data.append(final_data_dict)
+#
+# # Define the final schema table component
+# output_schema_table = dash_table.DataTable(id="output_schema_table",
+#                                            data=final_data,
+#                                            columns=[{"name": i, "id": i} for i in final_data[0].keys()],
+#                                            style_cell={'textAlign': 'center'},
+#                                            style_table={'overflowX': 'scroll'},
+#                                            )
 
-# Define the final schema table component
-output_schema_table = dash_table.DataTable(id="output_schema_table",
-                                           data=final_data,
-                                           columns=[{"name": i, "id": i} for i in final_data[0].keys()],
-                                           style_cell={'textAlign': 'center'},
-                                           style_table={'overflowX': 'scroll'},
-                                           )
 
 
 @app.callback(Output(component_id='postgresql_cart_table', component_property='data'),
               [Input(component_id='refresh', component_property='n_clicks')])
 def populate_cart_table(refresh):
-    df_cart_data = pd.read_sql(f'SELECT * FROM test_cart', pg_engine)
+    df_cart_data = pd.read_sql(f'SELECT * FROM {cart_table_name}', pg_engine)
     return df_cart_data.to_dict('records')
 
 
 @app.callback(Output(component_id='postgresql_supplier_table', component_property='data'),
               [Input(component_id='refresh', component_property='n_clicks')])
 def populate_supplier_table(refresh):
-    df_supplier_data = pd.read_sql(f'SELECT * FROM test_supplier', pg_engine)
+    df_supplier_data = pd.read_sql(f'SELECT * FROM {supplier_table_name}', pg_engine)
     return df_supplier_data.to_dict('records')
 
 
@@ -224,7 +228,7 @@ def show_selected_file_name(rows, n_clicks):
 
         list_noms_cols = df_supplier.loc[
             rows, [c for c in df_supplier.columns if c not in cols_metadata]].values.tolist()
-        
+
         temp_list_noms_cols = []
 
         for c in list_noms_cols:
@@ -244,8 +248,7 @@ def show_selected_file_name(rows, n_clicks):
             print(f'row["selected_columns"] : {row["selected_columns"]}')
             obj = s3_client.get_object(Bucket=s3_bucket, Key=f'{s3_dir}{row["selected_files"]}.csv')
             file_content = obj['Body'].read().decode('utf-8')
-            df_file = pd.read_csv(StringIO(file_content), sep=";", encoding="utf-8")
-            print(df_file[row["selected_columns"]].head(5))
+            df_file = pd.read_csv(StringIO(file_content), sep=";", encoding="utf-8", engine="python")
 
             new_element = html.Div([
                 html.Div(
@@ -268,7 +271,7 @@ def show_selected_file_name(rows, n_clicks):
                     # sort_action='native',
                     # filter_action='native',
                     page_size=5,
-                    style_table={'overflowX': 'scroll'}, 
+                    style_table={'overflowX': 'scroll'},
                 ),
                 html.Br(),
             ])
@@ -277,22 +280,22 @@ def show_selected_file_name(rows, n_clicks):
         return patched_children
 
 
-@app.callback(Output(component_id='output_schema_table', component_property='data'),
-              Output(component_id='output_schema_table', component_property='columns'),
-              [Input(component_id='final_submit', component_property='n_clicks'),
-               Input({'type': 'dynamic-dropdown', 'index': ALL}, 'value'),
-               Input({'type': 'dynamic-output', 'index': ALL}, 'children'),
-               State({'type': 'dynamic-dropdown', 'index': ALL}, 'id'),
-               State({'type': 'dynamic-output', 'index': ALL}, 'id'),
-               ])
-def populate_output_schema(submit, value_dropdown, value_output, id_dropdown, id_output):
-    new_output = [final_data_dict.copy()]
-    if ctx.triggered_id == "final_submit" and value_dropdown and value_output:
-        print(f"value_dropdown: {value_dropdown}")
-        print(f"value_output: {value_output}")
-        return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
-
-    return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
+# @app.callback(Output(component_id='output_schema_table', component_property='data'),
+#               Output(component_id='output_schema_table', component_property='columns'),
+#               [Input(component_id='final_submit', component_property='n_clicks'),
+#                Input({'type': 'dynamic-dropdown', 'index': ALL}, 'value'),
+#                Input({'type': 'dynamic-output', 'index': ALL}, 'children'),
+#                State({'type': 'dynamic-dropdown', 'index': ALL}, 'id'),
+#                State({'type': 'dynamic-output', 'index': ALL}, 'id'),
+#                ])
+# def populate_output_schema(submit, value_dropdown, value_output, id_dropdown, id_output):
+#     new_output = [final_data_dict.copy()]
+#     if ctx.triggered_id == "final_submit" and value_dropdown and value_output:
+#         print(f"value_dropdown: {value_dropdown}")
+#         print(f"value_output: {value_output}")
+#         return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
+#
+#     return new_output, [{"name": i, "id": i} for i in new_output[0].keys()]
 
 
 @app.callback(
@@ -315,18 +318,17 @@ def update_table(filter_expression):
 
 
 @app.callback(
-    Output('test', 'children'),
-    Input('postgresql_cart_table', 'filter_query'),
+    Output(component_id='test', component_property='children'),
+    Input(component_id='postgresql_cart_table', component_property='filter_query'),
     Input(component_id='final_submit', component_property='n_clicks'),
-    Input({'type': 'dynamic-dropdown', 'index': ALL}, 'value'),
+    Input({'type': 'dynamic-table', 'index': ALL}, 'selected_columns'),
     Input({'type': 'dynamic-output', 'index': ALL}, 'children'),
 )
-def submit_to_job(filter_expression, n_click, value_dropdown, value_output):
+def submit_to_job(filter_expression, n_click, selected_columns, value_output):
     list_filter_query = []
     list_file_column = []
     dict_result = {}
     if filter_expression:
-        print(filter_expression)
         filtering_expressions = filter_expression.split(' && ')
         print(filtering_expressions)
         for filter_part in filtering_expressions:
@@ -336,26 +338,35 @@ def submit_to_job(filter_expression, n_click, value_dropdown, value_output):
                 {"col_name": filter_col_name, "operator": operator, "filter_value": filter_value})
             # structure de la table
             # date_analyse | filtres_panier (text) | fichiers_fournisseurs (text) | colonnes_fournisseurs (text) | already_done (bool) | nom_fichier_final (text)
-            #[{'nom_fichier': 'fichier1', 'colonnes': ['col1', 'col2', 'col3']}, 
+            #[{'nom_fichier': 'fichier1', 'colonnes': ['col1', 'col2', 'col3']},
             #{'nom_fichier': 'fichier2', 'colonnes': ['col1', 'col2', 'col3']}]
         dict_result["filtres_panier"] = list_filter_query
-    if ctx.triggered_id == "final_submit" and value_dropdown and value_output:
+    if ctx.triggered_id == "final_submit" and selected_columns and value_output:
         dict_result["date_analyse"] = datetime.now()
         dict_result["fichiers_fournisseurs"] = value_output
 
         for i in range(len(value_output)):
-            print(f"'nom_fichier': {value_output[i]}, 'colonnes': {value_dropdown[i]}")
-            list_file_column.append({f"'nom_fichier': {value_output[i]}, 'colonnes': {value_dropdown[i]}"})
+            print(f"'nom_fichier': {value_output[i]}, 'colonnes': {selected_columns[i]}")
+            list_file_column.append({'nom_fichier': f"{value_output[i]}",
+                                     'colonnes': selected_columns[i]})
         # envoie sur pg dans une table:
         dict_result["colonnes_fournisseurs"] = list_file_column
         dict_result["already_done"] = False
-        dict_result["nom_fichier_final"] = None
+        dict_result["nom_fichier_final"] = f"analyse_{dict_result['date_analyse'].strftime('%Y-%m-%dT%H:%M:%S')}.csv"
         df = pd.DataFrame([dict_result])
+        # Change type to string
+        df["fichiers_fournisseurs"] = df["fichiers_fournisseurs"].astype(str)
+        df["filtres_panier"] = df["filtres_panier"].astype(str)
+        df["colonnes_fournisseurs"] = df["colonnes_fournisseurs"].astype(str)
+
         with pg_engine.connect() as conn_pg:
             with conn_pg.begin():
                 df.to_sql(pg_analyse_table, pg_engine, if_exists="append", index=False)
                 # call API pour lancer le job
-        return "Insertion dans la table pg_analyse_table réussie, l'analyse va bientôt démarrer."
+                print("API call")
+                saagie_client.jobs.run(job_id=analyse_job_id)
+
+                return "Insertion dans la table pg_analyse_table réussie, l'analyse va bientôt démarrer."
 
     return ""
 
@@ -379,12 +390,12 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row(dbc.Button("Submit", id='final_submit', color="primary", className="mr-1", n_clicks=0)),
     dbc.Row(dcc.Markdown(id="test"), ),
     dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(dcc.Markdown("Schéma attendu de l'analyse"), ),
-    dbc.Row(output_schema_table, style={'margin-left': '2%', 'margin-right': '2%', }),
-    dbc.Row(html.Br(), class_name=".mb-4"),
-
-    dbc.Row(html.Br(), class_name=".mb-4"),
-    dbc.Row(html.Br(), class_name=".mb-4"),
+    # dbc.Row(dcc.Markdown("Schéma attendu de l'analyse"), ),
+    # dbc.Row(output_schema_table, style={'margin-left': '2%', 'margin-right': '2%', }),
+    # dbc.Row(html.Br(), class_name=".mb-4"),
+    #
+    # dbc.Row(html.Br(), class_name=".mb-4"),
+    # dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dbc.Button("Refresh", id='refresh', color="primary", className="mr-1", n_clicks=0)),
     dbc.Row(html.Br(), class_name=".mb-4"),
     dbc.Row(dcc.Markdown(id="output_supplier_choices"), ),
@@ -403,4 +414,4 @@ app.layout = dbc.Container(fluid=True, children=[
 
 if __name__ == '__main__':
     print("Running second run_server")
-    app.run_server(host='0.0.0.0', debug=True, port=8050)
+    app.run_server(host='0.0.0.0', debug=False, port=8050)

@@ -3,3 +3,5 @@ dash
 pandas
 dash-bootstrap-components
 psycopg2
+boto3
+saagieapi==2.9.2
