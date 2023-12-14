@@ -244,7 +244,7 @@ def submit_to_job(derived_filter, n_click, selected_columns, value_output, prefi
                 print("API call")
                 saagie_client.jobs.run(job_id=analyse_job_id)
 
-                return "Insertion dans la table pg_analyse_table réussie." \
+                return f"Insertion dans la table {pg_analyse_table} réussie." \
                        f"L'analyse sera disponible sous le nom de: {dict_result['nom_fichier_final']}"
 
     return ""
