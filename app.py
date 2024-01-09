@@ -62,15 +62,14 @@ saagie_client = SaagieApi(url_saagie=os.environ["SAAGIE_URL"],
                           password=os.environ["TECHNICAL_SAAGIE_PWD"],
                           realm=os.environ["SAAGIE_REALM"])
 
-
 # Define the postgresql_supplier_table component
 df_supplier = pd.read_sql(f'SELECT * FROM {supplier_table_name}', pg_engine)
 
 postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
-                                                 data=df_supplier[cols_metadata].to_dict('records'),
+                                                 data=df_supplier.to_dict('records'),
                                                  columns=[{"name": i, "id": i, "selectable": True,
                                                            'type': utils.table_type(df_supplier[i])} for i in
-                                                          cols_metadata],
+                                                          df_supplier.columns],
                                                  cell_selectable=True,
                                                  style_cell={'textAlign': 'center'},
                                                  sort_action='native',
@@ -79,6 +78,9 @@ postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
                                                  row_selectable='multi',
                                                  selected_rows=[],
                                                  style_table={'overflowX': 'scroll'},
+                                                 style_cell_conditional=[
+                                                     {'if': {'column_id': c, },
+                                                      'display': 'None', } for c in df_supplier.columns if c not in cols_metadata]
                                                  )
 
 # Get cart data
@@ -119,37 +121,39 @@ def generate_frontpage():
               Output(component_id='postgresql_supplier_table', component_property='data'),
               [Input(component_id='refresh', component_property='n_clicks')])
 def populate_table(refresh):
-    if ctx.triggered_id == "refresh":
-        print("refresh")
-        df_cart_data = pd.read_sql(f'SELECT * FROM {cart_table_name} LIMIT 100', pg_engine)
-        df_cart_data["Quantité de réception"] = df_cart_data["Quantité de réception"].astype(int)
-        df_supplier_data = pd.read_sql(f"""SELECT *
-                                            FROM {supplier_table_name}""",
-                                       pg_engine)
-        return df_cart_data.to_dict('records'), df_supplier_data[cols_metadata].to_dict('records')
-    return df_cart.to_dict('records'), df_supplier[cols_metadata].to_dict('records')
+    pg_engine = utils.get_postgresql_client(postgresql_user=postgresql_user,
+                                            postgresql_pwd=postgresql_pwd,
+                                            database=postgresql_db)
+    df_cart_data = pd.read_sql(f'SELECT * FROM {cart_table_name} LIMIT 100', pg_engine)
+    df_cart_data["Quantité de réception"] = df_cart_data["Quantité de réception"].astype(int)
+    df_supplier_data = pd.read_sql(f"""SELECT *
+                                        FROM {supplier_table_name}""",
+                                   pg_engine)
+    return df_cart_data.to_dict('records'), df_supplier_data.to_dict('records')
 
 
 @app.callback(
     Output(component_id="output_div", component_property="children"),
 
     [Input(component_id='postgresql_supplier_table', component_property='selected_rows'),
+     Input(component_id='postgresql_supplier_table', component_property='data'),
      Input(component_id='submit', component_property='n_clicks'),
      ],
 )
-def show_selected_file_name(rows, n_clicks):
+def show_selected_file_name(rows, data, n_clicks):
     """
 
     """
     patched_children = Patch()
     if ctx.triggered_id == "submit":
-        list_noms_fichiers = df_supplier.loc[rows][['NomFichier']].values.tolist()
-        list_other_info = df_supplier.loc[rows][
+        df_supplier_data = pd.DataFrame(data)
+        list_noms_fichiers = df_supplier_data.loc[rows][['NomFichier']].values.tolist()
+        list_other_info = df_supplier_data.loc[rows][
             ['Marque', 'Fournisseur', 'DateEffective', 'DateReception']].values.tolist()
         print(f"list_noms_fichiers: {list_noms_fichiers}")
 
-        list_noms_cols = df_supplier.loc[
-            rows, [c for c in df_supplier.columns if c not in cols_metadata]].values.tolist()
+        list_noms_cols = df_supplier_data.loc[
+            rows, [c for c in df_supplier_data.columns if c not in cols_metadata]].values.tolist()
         temp_list_noms_cols = []
 
         for c in list_noms_cols:
@@ -285,6 +289,7 @@ def display_query(query):
 
 app.layout = html.Div(
     [
+        dcc.Store(id='session', storage_type='session'),
         html.Div(id="frontpage", className="page", children=generate_frontpage()),
         dcc.ConfirmDialog(
             id='confirm-danger',
