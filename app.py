@@ -36,16 +36,6 @@ cart_table_name = os.environ['POSTGRESQL_CART_TABLE']
 cols_metadata = ["Marque", "Fournisseur",
                  "DateEffective", "DateReception", "NomFichier"]
 
-generic_columns_name = [
-    'Reference brute', 'Reference DTP', 'Information1', 'Information2',
-    'Information3', 'Information4', 'Information5', 'Information6',
-    'Information7', 'Information8', 'Information9', 'Information10',
-    'Coefficient1', 'Coefficient2', 'Coefficient3', 'Coefficient4',
-    'Coefficient5', 'Coefficient6', 'Coefficient7', 'Coefficient8',
-    'Coefficient9', 'Coefficient10', 'Tarif1', 'Tarif2', 'Tarif3', 'Tarif4',
-    'Tarif5', 'Tarif6', 'Tarif7', 'Tarif8', 'Tarif9', 'Tarif10',
-    'NomFichier', 'Marque', 'Founisseur', 'DateEffective', 'DateReception'
-]
 
 # Connect to the postgresql database
 pg_engine = utils.get_postgresql_client(postgresql_user=postgresql_user,
@@ -64,6 +54,13 @@ saagie_client = SaagieApi(url_saagie=os.environ["SAAGIE_URL"],
 
 # Define the postgresql_supplier_table component
 df_supplier = pd.read_sql(f'SELECT * FROM {supplier_table_name}', pg_engine)
+# Reorder columns
+supplier_cols = df_supplier.columns.tolist()
+supplier_cols = supplier_cols[:-5] + cols_metadata
+df_supplier = df_supplier[supplier_cols]
+
+# define generic columns name
+generic_columns_name = df_supplier.columns.tolist()
 
 postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
                                                  data=df_supplier.to_dict('records'),
@@ -129,7 +126,7 @@ def populate_table(refresh):
     df_supplier_data = pd.read_sql(f"""SELECT *
                                         FROM {supplier_table_name}""",
                                    pg_engine)
-    return df_cart_data.to_dict('records'), df_supplier_data.to_dict('records')
+    return df_cart_data.to_dict('records'), df_supplier_data[supplier_cols].to_dict('records')
 
 
 @app.callback(
