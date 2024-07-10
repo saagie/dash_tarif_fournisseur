@@ -1,4 +1,5 @@
 import os
+import re
 
 import dash
 import dash_bootstrap_components as dbc
@@ -24,6 +25,7 @@ postgresql_pwd = os.environ["POSTGRESQL_WRITER_PWD"]
 postgresql_db = os.environ["POSTGRESQL_DATABASE"]
 
 s3_bucket = os.environ['SUPPLIER_S3_BUCKET']
+s3_analyse_bucket = os.environ["ANALYSE_S3_BUCKET"]
 s3_dir = os.environ['SUPPLIER_S3_PROCESSED_DIR']
 analyse_job_id = os.environ["ANALYSE_JOB_ID"]
 
@@ -35,7 +37,6 @@ cart_table_name = os.environ['POSTGRESQL_CART_TABLE']
 # Local variables
 cols_metadata = ["Marque", "Fournisseur",
                  "DateEffective", "DateReception", "NomFichier"]
-
 
 # Connect to the postgresql database
 pg_engine = utils.get_postgresql_client(postgresql_user=postgresql_user,
@@ -54,6 +55,9 @@ saagie_client = SaagieApi(url_saagie=os.environ["SAAGIE_URL"],
 
 # Define the postgresql_supplier_table component
 df_supplier = pd.read_sql(f'SELECT * FROM {supplier_table_name}', pg_engine)
+df_supplier["DateEffective"] = df_supplier["DateEffective"].str.replace('00:00:00', '').str.strip()
+df_supplier["DateReception"] = df_supplier["DateReception"].str.replace('00:00:00', '').str.strip()
+
 # Reorder columns
 supplier_cols = df_supplier.columns.tolist()
 supplier_cols = supplier_cols[:-5] + cols_metadata
@@ -77,7 +81,8 @@ postgresql_supplier_table = dash_table.DataTable(id="postgresql_supplier_table",
                                                  style_table={'overflowX': 'scroll'},
                                                  style_cell_conditional=[
                                                      {'if': {'column_id': c, },
-                                                      'display': 'None', } for c in df_supplier.columns if c not in cols_metadata]
+                                                      'display': 'None', } for c in df_supplier.columns if
+                                                     c not in cols_metadata]
                                                  )
 
 # Get cart data
@@ -100,7 +105,7 @@ def generate_frontpage():
     return html.Div(
         id="header",
         children=[
-            html.Img(id="logo", src="assets/logo.png", style={'display': 'inline-block',
+            html.Img(id="logo", src="assets/logo.jpg", style={'display': 'inline-block',
                                                               'height': '15%',
                                                               'width': '15%'}),
             html.Div(
@@ -126,6 +131,8 @@ def populate_table(refresh):
     df_supplier_data = pd.read_sql(f"""SELECT *
                                         FROM {supplier_table_name}""",
                                    pg_engine)
+    df_supplier_data["DateEffective"] = df_supplier_data["DateEffective"].str.replace('00:00:00', '').str.strip()
+    df_supplier_data["DateReception"] = df_supplier_data["DateReception"].str.replace('00:00:00', '').str.strip()
     return df_cart_data.to_dict('records'), df_supplier_data[supplier_cols].to_dict('records')
 
 
@@ -210,28 +217,72 @@ def show_selected_file_name(rows, data, n_clicks):
     Input(component_id='final_submit', component_property='n_clicks'),
     Input({'type': 'dynamic-table', 'index': ALL}, 'selected_columns'),
     Input({'type': 'dynamic-output', 'index': ALL}, 'children'),
-    Input(component_id='prefix_file', component_property='value')
+    Input(component_id='suffix_file', component_property='value'),
+    Input(component_id='postgresql_supplier_table', component_property='data'),
 )
-def submit_to_job(derived_filter, n_click, selected_columns, value_output, prefix_file, ):
+def submit_to_job(derived_filter, n_click, selected_columns, value_output, suffix_file, supplier_data):
     list_file_column = []
     dict_result = {}
     if derived_filter:
         dict_result["filtres_panier"] = derived_filter
+    else:
+        dict_result["filtres_panier"] = ""
 
     if ctx.triggered_id == "final_submit" and selected_columns and value_output:
         dict_result["date_analyse"] = datetime.now()
         dict_result["fichiers_fournisseurs"] = value_output
+        print("=============")
+        print(f"value_output: {value_output}")
+        df_supplier_tmp = pd.DataFrame(supplier_data)
+        list_marques = []
+        list_fournisseurs = []
 
         for i in range(len(value_output)):
             print(f"'nom_fichier': {value_output[i]}, 'colonnes': {selected_columns[i]}")
+            info_supplier = df_supplier_tmp[df_supplier_tmp["NomFichier"] == value_output[i]][["Marque", "Fournisseur",
+                                                                                               "DateEffective",
+                                                                                               "DateReception"]].iloc[
+                0].to_json()
+            dict_info_supplier = json.loads(info_supplier)
+            marque = dict_info_supplier["Marque"]
+            fournisseur = dict_info_supplier["Fournisseur"]
+            print(dict_info_supplier)
+            if marque not in list_marques:
+                list_marques.append(marque)
+            if fournisseur not in list_fournisseurs:
+                list_fournisseurs.append(fournisseur)
+
             list_file_column.append({'nom_fichier': f"{value_output[i]}",
-                                     'colonnes': selected_columns[i]})
+                                     'colonnes': selected_columns[i],
+                                     'marque': marque,
+                                     'Founisseur': fournisseur,
+                                     'DateEffective': dict_info_supplier["DateEffective"],
+                                     'DateReception': dict_info_supplier["DateReception"]
+                                     })
         # envoie sur pg dans une table:
         dict_result["colonnes_fournisseurs"] = list_file_column
         dict_result["already_done"] = False
-        prefix_file = prefix_file if prefix_file else "analyse"
+        suffix_file = f"_{suffix_file}" if suffix_file else ""
+        # Nom du fichier d'analyse est sous format: Marques_fournisseurs _dateAnalyse_SuffixePerso_numeroOrdreAuto
+        file_name = f"{'_'.join(list_marques)}_{'_'.join(list_fournisseurs)}_{dict_result['date_analyse'].strftime('%Y-%m-%d')}{suffix_file}"
+
+        # Chercher si le nom existe ou pas
+        all_analyse_files = utils.list_objects(s3_client,  bucket_name=s3_bucket, prefix=f"{s3_analyse_bucket}")
+        list_already_exist_files = [f.replace(".csv", "")for f in all_analyse_files if file_name in f and f.endswith(".csv")]
+        list_index = []
+        if list_already_exist_files:
+            for f in list_already_exist_files:
+                m = re.search(r'_\d+$', f)
+                if m is not None:
+                    list_index.append(int(m.group().replace("_", "")))
+                else:
+                    continue
+            max_index = max(list_index) if list_index else 0
+            new_index = max_index + 1
+            file_name = file_name + f"_{new_index}"
+
         dict_result[
-            "nom_fichier_final"] = f"{prefix_file}_{dict_result['date_analyse'].strftime('%Y-%m-%dT%H:%M:%S')}.csv"
+            "nom_fichier_final"] = file_name + ".csv"
         df = pd.DataFrame([dict_result])
         # Change type to string
         df["fichiers_fournisseurs"] = df["fichiers_fournisseurs"].astype(str)
@@ -307,6 +358,12 @@ app.layout = html.Div(
                     color="info",
                     className="d-flex align-items-center",
                 ),
+                dbc.Alert([
+                    html.I(className="bi bi-info-circle-fill me-2"),
+                    "La table ci-dessous ne contient uniquement les 1000 premières lignes.",
+                ],
+                    color="danger",
+                    className="d-flex align-items-center"),
                 dbc.Label("Saisir la requête de filtrage:", style={'float': 'left'}),
                 html.Abbr("\u2753", title="""La requête de filtrage est sous format: {nom de la colonne} opérateur valeur.
                 La liste des opérateurs est: >=, <=, <, >, !=, =,  contains.
@@ -359,9 +416,9 @@ app.layout = html.Div(
         html.Div(
             className="section",
             children=[
-                dbc.Label("Saisir le prefix du fichier d'analyse, par défaut 'analyse':"),
-                dbc.Input(id="prefix_file", type="text",
-                          placeholder="Enter the prefix of analyse file that you want to use"),
+                dbc.Label("Saisir le suffixe du fichier d'analyse (facultatif):"),
+                dbc.Input(id="suffix_file", type="text",
+                          placeholder="Enter the suffix of analyse file that you want to use"),
                 dbc.Row(html.Br(), class_name=".mb-4"),
 
                 dbc.Row(dbc.Button("Submit", id='final_submit', color="primary", className="mr-1", n_clicks=0)),
@@ -378,4 +435,4 @@ app.layout = html.Div(
 
 if __name__ == '__main__':
     print("Running second run_server")
-    app.run_server(host='0.0.0.0', debug=True, port=8050)
+    app.run_server(host='0.0.0.0', port=8050)
