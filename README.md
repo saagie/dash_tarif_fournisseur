@@ -1,4 +1,4 @@
-# Application pour l`use case Tarif Fournisseur
+# Application pour l'use case Tarif Fournisseur
 
 Dans cette application, on va mettre à disposition, les données panier ainsi que 
 les données tarifs fournissuers.
