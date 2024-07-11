@@ -435,4 +435,4 @@ app.layout = html.Div(
 
 if __name__ == '__main__':
     print("Running second run_server")
-    app.run_server(host='0.0.0.0', port=8050)
+    app.run_server(host='0.0.0.0',  debug=True, port=8050)
